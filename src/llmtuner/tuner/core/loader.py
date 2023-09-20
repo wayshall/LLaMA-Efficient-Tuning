@@ -13,7 +13,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase
 )
-from transformers.utils import check_min_version
+from transformers.utils import check_min_version, is_torch_npu_available
 from transformers.utils.versions import require_version
 from trl import AutoModelForCausalLMWithValueHead
 
@@ -86,10 +86,8 @@ def load_model_and_tokenizer(
 
     # Fix config (for Qwen)
     if is_trainable and hasattr(config, "fp16") and hasattr(config, "bf16"):
-        if model_args.compute_dtype == torch.bfloat16:
-            setattr(config, "bf16", True)
-        else:
-            setattr(config, "fp16", True)
+        setattr(config, "fp16", model_args.compute_dtype == torch.float16)
+        setattr(config, "bf16", model_args.compute_dtype == torch.bfloat16)
 
     # Set RoPE scaling
     if model_args.rope_scaling is not None:
@@ -103,7 +101,6 @@ def load_model_and_tokenizer(
 
         elif hasattr(config, "rope_scaling"): # for LLaMA and Falcon models
             require_version("transformers>=4.31.0", "RoPE scaling requires transformers>=4.31.0")
-
             if is_trainable:
                 if model_args.rope_scaling == "dynamic":
                     assert not model_args.flash_attn, "Flash attention does not support dynamic rope scaling."
@@ -218,7 +215,10 @@ def load_model_and_tokenizer(
     # Prepare model for inference
     if not is_trainable:
         model.requires_grad_(False) # fix all model params
-        infer_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16 # detect cuda capability
+        if is_torch_npu_available():
+            infer_dtype = torch.float16
+        else:
+            infer_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16 # detect cuda capability
         model = model.to(infer_dtype) if model_args.quantization_bit is None else model
 
     trainable_params, all_param = count_parameters(model)
